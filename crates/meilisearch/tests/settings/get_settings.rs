@@ -11,59 +11,62 @@ macro_rules! test_setting_routes {
 
                 #[actix_rt::test]
                 async fn get_unexisting_index() {
-                    let server = Server::new().await;
-                    let url = format!("/indexes/test/settings/{}",
-                        stringify!($setting)
-                        .chars()
-                        .map(|c| if c == '_' { '-' } else { c })
-                        .collect::<String>());
-                    let (_response, code) = server.service.get(url).await;
-                    assert_eq!(code, 404);
-                }
-
-                #[actix_rt::test]
-                async fn update_unexisting_index() {
-                    let server = Server::new().await;
-                    let url = format!("/indexes/test/settings/{}",
-                        stringify!($setting)
-                        .chars()
-                        .map(|c| if c == '_' { '-' } else { c })
-                        .collect::<String>());
-                    let (response, code) = server.service.$update_verb(url, serde_json::Value::Null.into()).await;
-                    assert_eq!(code, 202, "{}", response);
-                    server.index("").wait_task(0).await;
-                    let (response, code) = server.index("test").get().await;
-                    assert_eq!(code, 200, "{}", response);
-                }
-
-                #[actix_rt::test]
-                async fn delete_unexisting_index() {
-                    let server = Server::new().await;
-                    let url = format!("/indexes/test/settings/{}",
-                        stringify!($setting)
-                        .chars()
-                        .map(|c| if c == '_' { '-' } else { c })
-                        .collect::<String>());
-                    let (_, code) = server.service.delete(url).await;
-                    assert_eq!(code, 202);
-                    let response = server.index("").wait_task(0).await;
-                    assert_eq!(response["status"], "failed");
-                }
-
-                #[actix_rt::test]
-                async fn get_default() {
-                    let server = Server::new().await;
-                    let index = server.index("test");
-                    let (response, code) = index.create(None).await;
-                    assert_eq!(code, 202, "{}", response);
-                    index.wait_task(0).await;
-                    let url = format!("/indexes/test/settings/{}",
+                    let server = Server::new_shared();
+                    let index_name = uuid::Uuid::new_v4().to_string();
+                    let url = format!("/indexes/{index_name}/settings/{}",
                         stringify!($setting)
                         .chars()
                         .map(|c| if c == '_' { '-' } else { c })
                         .collect::<String>());
                     let (response, code) = server.service.get(url).await;
-                    assert_eq!(code, 200, "{}", response);
+                    assert_eq!(code, 404, "{response}");
+                }
+
+                #[actix_rt::test]
+                async fn update_unexisting_index() {
+                    let server = Server::new_shared();
+                    let index_name = uuid::Uuid::new_v4().to_string();
+                    let url = format!("/indexes/{index_name}/settings/{}",
+                        stringify!($setting)
+                        .chars()
+                        .map(|c| if c == '_' { '-' } else { c })
+                        .collect::<String>());
+                    let (response, code) = server.service.$update_verb(url, serde_json::Value::Null.into()).await;
+                    assert_eq!(code, 202, "{response}");
+                    let (response, code) = server.service.get(format!("/indixes/{index_name}")).await;
+                    assert_eq!(code, 404, "{response}");
+                }
+
+                #[actix_rt::test]
+                async fn delete_unexisting_index() {
+                    let server = Server::new_shared();
+                    let index_name = uuid::Uuid::new_v4().to_string();
+                    let url = format!("/indexes/{index_name}/settings/{}",
+                        stringify!($setting)
+                        .chars()
+                        .map(|c| if c == '_' { '-' } else { c })
+                        .collect::<String>());
+                    let (response, code) = server.service.delete(url).await;
+                    assert_eq!(code, 202, "{response}");
+                    let (response, code) = server.service.get(format!("/indixes/{index_name}")).await;
+                    assert_eq!(code, 404, "{response}");
+                }
+
+                #[actix_rt::test]
+                async fn get_default() {
+                    let server = Server::new_shared();
+                    let index = server.unique_index();
+                    let (response, code) = index.create(None).await;
+                    assert_eq!(code, 202, "{response}");
+                    server.wait_task(response.uid()).await.succeeded();
+                    let url = format!("/indexes/{}/settings/{}",
+                        index.uid,
+                        stringify!($setting)
+                        .chars()
+                        .map(|c| if c == '_' { '-' } else { c })
+                        .collect::<String>());
+                    let (response, code) = server.service.get(url).await;
+                    assert_eq!(code, 200, "{response}");
                     let expected = crate::json!($default_value);
                     assert_eq!(expected, response);
                 }
@@ -179,23 +182,34 @@ test_setting_routes!(
     {
         setting: typo_tolerance,
         update_verb: patch,
-        default_value: {"enabled": true, "minWordSizeForTypos": {"oneTypo": 5, "twoTypos": 9}, "disableOnWords": [], "disableOnAttributes": []}
+        default_value: {"enabled": true, "minWordSizeForTypos": {"oneTypo": 5, "twoTypos": 9}, "disableOnWords": [], "disableOnAttributes": [], "disableOnNumbers": false}
+    },
+    {
+        setting: chat,
+        update_verb: put,
+        default_value: {
+            "description": "",
+            "documentTemplate": "{% for field in fields %}{% if field.is_searchable and field.value != nil %}{{ field.name }}: {{ field.value }}\n{% endif %}{% endfor %}",
+            "documentTemplateMaxBytes": 400,
+            "searchParameters": {}
+        }
     },
 );
 
 #[actix_rt::test]
 async fn get_settings_unexisting_index() {
-    let server = Server::new().await;
-    let (response, code) = server.index("test").settings().await;
-    assert_eq!(code, 404, "{}", response)
+    let server = Server::new_shared();
+    let index = server.unique_index();
+    let (response, code) = index.settings().await;
+    assert_eq!(code, 404, "{response}")
 }
 
 #[actix_rt::test]
 async fn get_settings() {
-    let server = Server::new().await;
-    let index = server.index("test");
+    let server = Server::new_shared();
+    let index = server.unique_index();
     let (response, _code) = index.create(None).await;
-    index.wait_task(response.uid()).await.succeeded();
+    server.wait_task(response.uid()).await.succeeded();
     let (response, code) = index.settings().await;
     assert_eq!(code, 200);
     let settings = response.as_object().unwrap();
@@ -233,15 +247,28 @@ async fn get_settings() {
     assert_eq!(settings["prefixSearch"], json!("indexingTime"));
     assert_eq!(settings["facetSearch"], json!(true));
     assert_eq!(settings["embedders"], json!({}));
+    assert_eq!(settings["synonyms"], json!({}));
+    assert_eq!(
+        settings["typoTolerance"],
+        json!({
+            "enabled": true,
+            "minWordSizeForTypos": {
+                "oneTypo": 5,
+                "twoTypos": 9
+            },
+            "disableOnWords": [],
+            "disableOnAttributes": [],
+            "disableOnNumbers": false
+        })
+    );
 }
 
 #[actix_rt::test]
 async fn secrets_are_hidden_in_settings() {
-    let server = Server::new().await;
-
-    let index = server.index("test");
+    let server = Server::new_shared();
+    let index = server.unique_index();
     let (response, _code) = index.create(None).await;
-    index.wait_task(response.uid()).await.succeeded();
+    server.wait_task(response.uid()).await.succeeded();
 
     let (response, code) = index
         .update_settings(json!({
@@ -259,11 +286,11 @@ async fn secrets_are_hidden_in_settings() {
         .await;
     meili_snap::snapshot!(code, @"202 Accepted");
 
-    meili_snap::snapshot!(meili_snap::json_string!(response, { ".duration" => "[duration]", ".enqueuedAt" => "[date]", ".startedAt" => "[date]", ".finishedAt" => "[date]" }),
+    meili_snap::snapshot!(meili_snap::json_string!(response, { ".taskUid" => "[task_uid]", ".duration" => "[duration]", ".enqueuedAt" => "[date]", ".startedAt" => "[date]", ".finishedAt" => "[date]" }),
     @r###"
     {
-      "taskUid": 1,
-      "indexUid": "test",
+      "taskUid": "[task_uid]",
+      "indexUid": "[uuid]",
       "status": "enqueued",
       "type": "settingsUpdate",
       "enqueuedAt": "[date]"
@@ -272,11 +299,11 @@ async fn secrets_are_hidden_in_settings() {
 
     let settings_update_uid = response.uid();
 
-    index.wait_task(settings_update_uid).await;
+    server.wait_task(settings_update_uid).await.succeeded();
 
     let (response, code) = index.settings().await;
     meili_snap::snapshot!(code, @"200 OK");
-    meili_snap::snapshot!(meili_snap::json_string!(response), @r#"
+    meili_snap::snapshot!(meili_snap::json_string!(response), @r###"
     {
       "displayedAttributes": [
         "*"
@@ -308,7 +335,8 @@ async fn secrets_are_hidden_in_settings() {
           "twoTypos": 9
         },
         "disableOnWords": [],
-        "disableOnAttributes": []
+        "disableOnAttributes": [],
+        "disableOnNumbers": false
       },
       "faceting": {
         "maxValuesPerFacet": 100,
@@ -337,7 +365,7 @@ async fn secrets_are_hidden_in_settings() {
       "facetSearch": true,
       "prefixSearch": "indexingTime"
     }
-    "#);
+    "###);
 
     let (response, code) = server.get_task(settings_update_uid).await;
     meili_snap::snapshot!(code, @"200 OK");
@@ -359,25 +387,25 @@ async fn secrets_are_hidden_in_settings() {
 
 #[actix_rt::test]
 async fn error_update_settings_unknown_field() {
-    let server = Server::new().await;
-    let index = server.index("test");
+    let server = Server::new_shared();
+    let index = server.unique_index();
     let (_response, code) = index.update_settings(json!({"foo": 12})).await;
     assert_eq!(code, 400);
 }
 
 #[actix_rt::test]
 async fn test_partial_update() {
-    let server = Server::new().await;
-    let index = server.index("test");
+    let server = Server::new_shared();
+    let index = server.unique_index();
     let (task, _code) = index.update_settings(json!({"displayedAttributes": ["foo"]})).await;
-    index.wait_task(task.uid()).await.succeeded();
+    server.wait_task(task.uid()).await.succeeded();
     let (response, code) = index.settings().await;
     assert_eq!(code, 200);
     assert_eq!(response["displayedAttributes"], json!(["foo"]));
     assert_eq!(response["searchableAttributes"], json!(["*"]));
 
     let (task, _) = index.update_settings(json!({"searchableAttributes": ["bar"]})).await;
-    index.wait_task(task.uid()).await.succeeded();
+    server.wait_task(task.uid()).await.succeeded();
 
     let (response, code) = index.settings().await;
     assert_eq!(code, 200);
@@ -387,20 +415,18 @@ async fn test_partial_update() {
 
 #[actix_rt::test]
 async fn error_delete_settings_unexisting_index() {
-    let server = Server::new().await;
-    let index = server.index("test");
+    let server = Server::new_shared();
+    let index = server.unique_index();
     let (task, code) = index.delete_settings().await;
     assert_eq!(code, 202);
 
-    let response = index.wait_task(task.uid()).await;
-
-    assert_eq!(response["status"], "failed");
+    server.wait_task(task.uid()).await.failed();
 }
 
 #[actix_rt::test]
 async fn reset_all_settings() {
-    let server = Server::new().await;
-    let index = server.index("test");
+    let server = Server::new_shared();
+    let index = server.unique_index();
 
     let documents = json!([
         {
@@ -412,13 +438,19 @@ async fn reset_all_settings() {
 
     let (response, code) = index.add_documents(documents, None).await;
     assert_eq!(code, 202);
-    assert_eq!(response["taskUid"], 0);
-    index.wait_task(response.uid()).await.succeeded();
+    server.wait_task(response.uid()).await.succeeded();
 
-    let (update_task,_status_code) = index
-        .update_settings(json!({"displayedAttributes": ["name", "age"], "searchableAttributes": ["name"], "stopWords": ["the"], "filterableAttributes": ["age"], "synonyms": {"puppy": ["dog", "doggo", "potat"] }}))
+    let (update_task, _status_code) = index
+        .update_settings(json!({
+            "displayedAttributes": ["name", "age"],
+            "searchableAttributes": ["name"],
+            "stopWords": ["the"],
+            "filterableAttributes": ["age"],
+            "synonyms": {"puppy": ["dog", "doggo", "potat"] },
+            "typoTolerance": {"disableOnNumbers": true}
+        }))
         .await;
-    index.wait_task(update_task.uid()).await.succeeded();
+    server.wait_task(update_task.uid()).await.succeeded();
     let (response, code) = index.settings().await;
     assert_eq!(code, 200);
     assert_eq!(response["displayedAttributes"], json!(["name", "age"]));
@@ -426,9 +458,22 @@ async fn reset_all_settings() {
     assert_eq!(response["stopWords"], json!(["the"]));
     assert_eq!(response["synonyms"], json!({"puppy": ["dog", "doggo", "potat"] }));
     assert_eq!(response["filterableAttributes"], json!(["age"]));
+    assert_eq!(
+        response["typoTolerance"],
+        json!({
+            "enabled": true,
+            "minWordSizeForTypos": {
+                "oneTypo": 5,
+                "twoTypos": 9
+            },
+            "disableOnWords": [],
+            "disableOnAttributes": [],
+            "disableOnNumbers": true
+        })
+    );
 
     let (delete_task, _status_code) = index.delete_settings().await;
-    index.wait_task(delete_task.uid()).await.succeeded();
+    server.wait_task(delete_task.uid()).await.succeeded();
 
     let (response, code) = index.settings().await;
     assert_eq!(code, 200);
@@ -437,6 +482,19 @@ async fn reset_all_settings() {
     assert_eq!(response["stopWords"], json!([]));
     assert_eq!(response["filterableAttributes"], json!([]));
     assert_eq!(response["synonyms"], json!({}));
+    assert_eq!(
+        response["typoTolerance"],
+        json!({
+            "enabled": true,
+            "minWordSizeForTypos": {
+                "oneTypo": 5,
+                "twoTypos": 9
+            },
+            "disableOnWords": [],
+            "disableOnAttributes": [],
+            "disableOnNumbers": false
+        })
+    );
 
     let (response, code) = index.get_document(1, None).await;
     assert_eq!(code, 200);
@@ -445,17 +503,15 @@ async fn reset_all_settings() {
 
 #[actix_rt::test]
 async fn update_setting_unexisting_index() {
-    let server = Server::new().await;
-    let index = server.index("test");
+    let server = Server::new_shared();
+    let index = server.unique_index();
     let (task, code) = index.update_settings(json!({})).await;
     assert_eq!(code, 202);
-    let response = index.wait_task(task.uid()).await;
-    assert_eq!(response["status"], "succeeded");
+    server.wait_task(task.uid()).await.succeeded();
     let (_response, code) = index.get().await;
     assert_eq!(code, 200);
     let (task, _status_code) = index.delete_settings().await;
-    let response = index.wait_task(task.uid()).await;
-    assert_eq!(response["status"], "succeeded");
+    server.wait_task(task.uid()).await.succeeded();
 }
 
 #[actix_rt::test]
@@ -476,8 +532,8 @@ async fn error_update_setting_unexisting_index_invalid_uid() {
 
 #[actix_rt::test]
 async fn error_set_invalid_ranking_rules() {
-    let server = Server::new().await;
-    let index = server.index("test");
+    let server = Server::new_shared();
+    let index = server.unique_index();
     index.create(None).await;
 
     let (response, code) = index.update_settings(json!({ "rankingRules": [ "manyTheFish"]})).await;
@@ -494,11 +550,11 @@ async fn error_set_invalid_ranking_rules() {
 
 #[actix_rt::test]
 async fn set_and_reset_distinct_attribute_with_dedicated_route() {
-    let server = Server::new().await;
-    let index = server.index("test");
+    let server = Server::new_shared();
+    let index = server.unique_index();
 
     let (task, _code) = index.update_distinct_attribute(json!("test")).await;
-    index.wait_task(task.uid()).await.succeeded();
+    server.wait_task(task.uid()).await.succeeded();
 
     let (response, _) = index.get_distinct_attribute().await;
 
@@ -506,7 +562,7 @@ async fn set_and_reset_distinct_attribute_with_dedicated_route() {
 
     let (task, _status_code) = index.update_distinct_attribute(json!(null)).await;
 
-    index.wait_task(task.uid()).await.succeeded();
+    server.wait_task(task.uid()).await.succeeded();
 
     let (response, _) = index.get_distinct_attribute().await;
 
@@ -515,8 +571,8 @@ async fn set_and_reset_distinct_attribute_with_dedicated_route() {
 
 #[actix_rt::test]
 async fn granular_filterable_attributes() {
-    let server = Server::new().await;
-    let index = server.index("test");
+    let server = Server::new_shared();
+    let index = server.unique_index();
     index.create(None).await;
 
     let (response, code) =
@@ -531,10 +587,10 @@ async fn granular_filterable_attributes() {
             { "attributePatterns": ["default-facet-search"], "features": { "filter": {"equality": true, "comparison": true} } },
         ] })).await;
     assert_eq!(code, 202);
-    index.wait_task(response.uid()).await.succeeded();
+    server.wait_task(response.uid()).await.succeeded();
 
     let (response, code) = index.settings().await;
-    assert_eq!(code, 200, "{}", response);
+    assert_eq!(code, 200, "{response}");
     snapshot!(json_string!(response["filterableAttributes"]), @r###"
     [
       {

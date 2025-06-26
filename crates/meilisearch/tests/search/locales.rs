@@ -89,9 +89,9 @@ static DOCUMENTS: Lazy<Value> = Lazy::new(|| {
 
 #[actix_rt::test]
 async fn simple_search() {
-    let server = Server::new().await;
+    let server = Server::new_shared();
+    let index = server.unique_index();
 
-    let index = server.index("test");
     let documents = DOCUMENTS.clone();
     index
         .update_settings(
@@ -99,7 +99,7 @@ async fn simple_search() {
         )
         .await;
     let (task, _status_code) = index.add_documents(documents, None).await;
-    index.wait_task(task.uid()).await.succeeded();
+    server.wait_task(task.uid()).await.succeeded();
 
     // english
     index
@@ -147,23 +147,20 @@ async fn simple_search() {
         .search(
             json!({"q": "進撃", "locales": ["jpn"], "attributesToRetrieve": ["id"]}),
             |response, code| {
-                snapshot!(response, @r###"
+                snapshot!(response, @r#"
                 {
                   "hits": [
                     {
                       "id": 852
-                    },
-                    {
-                      "id": 853
                     }
                   ],
                   "query": "進撃",
                   "processingTimeMs": "[duration]",
                   "limit": 20,
                   "offset": 0,
-                  "estimatedTotalHits": 2
+                  "estimatedTotalHits": 1
                 }
-                "###);
+                "#);
                 snapshot!(code, @"200 OK");
             },
         )
@@ -172,23 +169,20 @@ async fn simple_search() {
     // chinese
     index
         .search(json!({"q": "进击", "attributesToRetrieve": ["id"]}), |response, code| {
-            snapshot!(response, @r###"
+            snapshot!(response, @r#"
             {
               "hits": [
                 {
                   "id": 853
-                },
-                {
-                  "id": 852
                 }
               ],
               "query": "进击",
               "processingTimeMs": "[duration]",
               "limit": 20,
               "offset": 0,
-              "estimatedTotalHits": 2
+              "estimatedTotalHits": 1
             }
-            "###);
+            "#);
             snapshot!(code, @"200 OK");
         })
         .await;
@@ -196,9 +190,9 @@ async fn simple_search() {
 
 #[actix_rt::test]
 async fn force_locales() {
-    let server = Server::new().await;
+    let server = Server::new_shared();
+    let index = server.unique_index();
 
-    let index = server.index("test");
     let documents = DOCUMENTS.clone();
     let (response, _) = index
         .update_settings(
@@ -211,17 +205,17 @@ async fn force_locales() {
             }),
         )
         .await;
-    snapshot!(response, @r###"
+    snapshot!(json_string!(response, { ".taskUid" => "[task_uid]", ".enqueuedAt" => "[date]" }), @r###"
     {
-      "taskUid": 0,
-      "indexUid": "test",
+      "taskUid": "[task_uid]",
+      "indexUid": "[uuid]",
       "status": "enqueued",
       "type": "settingsUpdate",
       "enqueuedAt": "[date]"
     }
     "###);
     let (task, _status_code) = index.add_documents(documents, None).await;
-    index.wait_task(task.uid()).await.succeeded();
+    server.wait_task(task.uid()).await.succeeded();
 
     // chinese detection
     index
@@ -274,9 +268,9 @@ async fn force_locales() {
 
 #[actix_rt::test]
 async fn force_locales_with_pattern() {
-    let server = Server::new().await;
+    let server = Server::new_shared();
+    let index = server.unique_index();
 
-    let index = server.index("test");
     let documents = DOCUMENTS.clone();
     let (response, _) = index
         .update_settings(
@@ -289,17 +283,17 @@ async fn force_locales_with_pattern() {
             }),
         )
         .await;
-    snapshot!(response, @r###"
+    snapshot!(json_string!(response, { ".taskUid" => "[task_uid]", ".enqueuedAt" => "[date]" }), @r###"
     {
-      "taskUid": 0,
-      "indexUid": "test",
+      "taskUid": "[task_uid]",
+      "indexUid": "[uuid]",
       "status": "enqueued",
       "type": "settingsUpdate",
       "enqueuedAt": "[date]"
     }
     "###);
     let (task, _status_code) = index.add_documents(documents, None).await;
-    index.wait_task(task.uid()).await.succeeded();
+    server.wait_task(task.uid()).await.succeeded();
 
     // chinese detection
     index
@@ -352,9 +346,9 @@ async fn force_locales_with_pattern() {
 
 #[actix_rt::test]
 async fn force_locales_with_pattern_nested() {
-    let server = Server::new().await;
+    let server = Server::new_shared();
+    let index = server.unique_index();
 
-    let index = server.index("test");
     let documents = NESTED_DOCUMENTS.clone();
     let (response, _) = index
         .update_settings(json!({
@@ -365,17 +359,17 @@ async fn force_locales_with_pattern_nested() {
             ]
         }))
         .await;
-    snapshot!(response, @r###"
+    snapshot!(json_string!(response, { ".taskUid" => "[task_uid]", ".enqueuedAt" => "[date]" }), @r###"
     {
-      "taskUid": 0,
-      "indexUid": "test",
+      "taskUid": "[task_uid]",
+      "indexUid": "[uuid]",
       "status": "enqueued",
       "type": "settingsUpdate",
       "enqueuedAt": "[date]"
     }
     "###);
     let (task, _status_code) = index.add_documents(documents, None).await;
-    index.wait_task(task.uid()).await.succeeded();
+    server.wait_task(task.uid()).await.succeeded();
 
     // chinese
     index
@@ -423,9 +417,9 @@ async fn force_locales_with_pattern_nested() {
 }
 #[actix_rt::test]
 async fn force_different_locales_with_pattern() {
-    let server = Server::new().await;
+    let server = Server::new_shared();
+    let index = server.unique_index();
 
-    let index = server.index("test");
     let documents = DOCUMENTS.clone();
     let (response, _) = index
         .update_settings(
@@ -440,17 +434,17 @@ async fn force_different_locales_with_pattern() {
             }),
         )
         .await;
-    snapshot!(response, @r###"
+    snapshot!(json_string!(response, { ".taskUid" => "[task_uid]", ".enqueuedAt" => "[date]" }), @r###"
     {
-      "taskUid": 0,
-      "indexUid": "test",
+      "taskUid": "[task_uid]",
+      "indexUid": "[uuid]",
       "status": "enqueued",
       "type": "settingsUpdate",
       "enqueuedAt": "[date]"
     }
     "###);
     let (task, _status_code) = index.add_documents(documents, None).await;
-    index.wait_task(task.uid()).await.succeeded();
+    server.wait_task(task.uid()).await.succeeded();
 
     // force chinese
     index
@@ -499,9 +493,9 @@ async fn force_different_locales_with_pattern() {
 
 #[actix_rt::test]
 async fn auto_infer_locales_at_search_with_attributes_to_search_on() {
-    let server = Server::new().await;
+    let server = Server::new_shared();
+    let index = server.unique_index();
 
-    let index = server.index("test");
     let documents = DOCUMENTS.clone();
     let (response, _) = index
         .update_settings(
@@ -518,17 +512,17 @@ async fn auto_infer_locales_at_search_with_attributes_to_search_on() {
             }),
         )
         .await;
-    snapshot!(response, @r###"
+    snapshot!(json_string!(response, { ".taskUid" => "[task_uid]", ".enqueuedAt" => "[date]" }), @r###"
     {
-      "taskUid": 0,
-      "indexUid": "test",
+      "taskUid": "[task_uid]",
+      "indexUid": "[uuid]",
       "status": "enqueued",
       "type": "settingsUpdate",
       "enqueuedAt": "[date]"
     }
     "###);
     let (task, _status_code) = index.add_documents(documents, None).await;
-    index.wait_task(task.uid()).await.succeeded();
+    server.wait_task(task.uid()).await.succeeded();
 
     // auto infer any language
     index
@@ -577,9 +571,9 @@ async fn auto_infer_locales_at_search_with_attributes_to_search_on() {
 
 #[actix_rt::test]
 async fn auto_infer_locales_at_search() {
-    let server = Server::new().await;
+    let server = Server::new_shared();
+    let index = server.unique_index();
 
-    let index = server.index("test");
     let documents = DOCUMENTS.clone();
     let (response, _) = index
         .update_settings(
@@ -592,17 +586,17 @@ async fn auto_infer_locales_at_search() {
             }),
         )
         .await;
-    snapshot!(response, @r###"
+    snapshot!(json_string!(response, { ".taskUid" => "[task_uid]", ".enqueuedAt" => "[date]" }), @r###"
     {
-      "taskUid": 0,
-      "indexUid": "test",
+      "taskUid": "[task_uid]",
+      "indexUid": "[uuid]",
       "status": "enqueued",
       "type": "settingsUpdate",
       "enqueuedAt": "[date]"
     }
     "###);
     let (task, _status_code) = index.add_documents(documents, None).await;
-    index.wait_task(task.uid()).await.succeeded();
+    server.wait_task(task.uid()).await.succeeded();
 
     index
         .search(
@@ -676,9 +670,9 @@ async fn auto_infer_locales_at_search() {
 
 #[actix_rt::test]
 async fn force_different_locales_with_pattern_nested() {
-    let server = Server::new().await;
+    let server = Server::new_shared();
+    let index = server.unique_index();
 
-    let index = server.index("test");
     let documents = NESTED_DOCUMENTS.clone();
     let (response, _) = index
         .update_settings(json!({
@@ -691,17 +685,17 @@ async fn force_different_locales_with_pattern_nested() {
             ]
         }))
         .await;
-    snapshot!(response, @r###"
+    snapshot!(json_string!(response, { ".taskUid" => "[task_uid]", ".enqueuedAt" => "[date]" }), @r###"
     {
-      "taskUid": 0,
-      "indexUid": "test",
+      "taskUid": "[task_uid]",
+      "indexUid": "[uuid]",
       "status": "enqueued",
       "type": "settingsUpdate",
       "enqueuedAt": "[date]"
     }
     "###);
     let (task, _status_code) = index.add_documents(documents, None).await;
-    index.wait_task(task.uid()).await.succeeded();
+    server.wait_task(task.uid()).await.succeeded();
 
     // chinese
     index
@@ -774,12 +768,12 @@ async fn force_different_locales_with_pattern_nested() {
 
 #[actix_rt::test]
 async fn settings_change() {
-    let server = Server::new().await;
+    let server = Server::new_shared();
+    let index = server.unique_index();
 
-    let index = server.index("test");
     let documents = NESTED_DOCUMENTS.clone();
     let (task, _status_code) = index.add_documents(documents, None).await;
-    index.wait_task(task.uid()).await.succeeded();
+    server.wait_task(task.uid()).await.succeeded();
     let (response, _) = index
         .update_settings(json!({
             "searchableAttributes": ["document_en", "document_ja", "document_zh"],
@@ -789,16 +783,16 @@ async fn settings_change() {
             ]
         }))
         .await;
-    snapshot!(response, @r###"
+    snapshot!(json_string!(response, { ".taskUid" => "[task_uid]", ".enqueuedAt" => "[date]" }), @r###"
     {
-      "taskUid": 1,
-      "indexUid": "test",
+      "taskUid": "[task_uid]",
+      "indexUid": "[uuid]",
       "status": "enqueued",
       "type": "settingsUpdate",
       "enqueuedAt": "[date]"
     }
     "###);
-    index.wait_task(response.uid()).await.succeeded();
+    server.wait_task(response.uid()).await.succeeded();
 
     // chinese
     index
@@ -852,16 +846,16 @@ async fn settings_change() {
             ]
         }))
         .await;
-    snapshot!(response, @r###"
+    snapshot!(json_string!(response, { ".taskUid" => "[task_uid]", ".enqueuedAt" => "[date]" }), @r###"
     {
-      "taskUid": 2,
-      "indexUid": "test",
+      "taskUid": "[task_uid]",
+      "indexUid": "[uuid]",
       "status": "enqueued",
       "type": "settingsUpdate",
       "enqueuedAt": "[date]"
     }
     "###);
-    index.wait_task(response.uid()).await.succeeded();
+    server.wait_task(response.uid()).await.succeeded();
 
     // chinese
     index
@@ -906,9 +900,9 @@ async fn settings_change() {
 
 #[actix_rt::test]
 async fn invalid_locales() {
-    let server = Server::new().await;
+    let server = Server::new_shared();
+    let index = server.unique_index();
 
-    let index = server.index("test");
     let documents = DOCUMENTS.clone();
     index
         .update_settings(
@@ -916,7 +910,7 @@ async fn invalid_locales() {
         )
         .await;
     let (task, _status_code) = index.add_documents(documents, None).await;
-    index.wait_task(task.uid()).await.succeeded();
+    server.wait_task(task.uid()).await.succeeded();
 
     let (response, code) = index.search_post(json!({"q": "Atta", "locales": ["invalid"]})).await;
     snapshot!(code, @"400 Bad Request");
@@ -945,9 +939,9 @@ async fn invalid_locales() {
 
 #[actix_rt::test]
 async fn invalid_localized_attributes_rules() {
-    let server = Server::new().await;
+    let server = Server::new_shared();
+    let index = server.unique_index();
 
-    let index = server.index("test");
     let (response, _) = index
         .update_settings(json!({
             "localizedAttributes": [
@@ -1015,26 +1009,26 @@ async fn invalid_localized_attributes_rules() {
 
 #[actix_rt::test]
 async fn simple_facet_search() {
-    let server = Server::new().await;
+    let server = Server::new_shared();
+    let index = server.unique_index();
 
-    let index = server.index("test");
     let documents = DOCUMENTS.clone();
     let (response, _) = index
         .update_settings(json!({
             "filterableAttributes": ["name_en", "name_ja", "name_zh"],
         }))
         .await;
-    snapshot!(response, @r###"
+    snapshot!(json_string!(response, { ".taskUid" => "[task_uid]", ".enqueuedAt" => "[date]" }), @r###"
     {
-      "taskUid": 0,
-      "indexUid": "test",
+      "taskUid": "[task_uid]",
+      "indexUid": "[uuid]",
       "status": "enqueued",
       "type": "settingsUpdate",
       "enqueuedAt": "[date]"
     }
     "###);
     let (task, _status_code) = index.add_documents(documents, None).await;
-    index.wait_task(task.uid()).await.succeeded();
+    server.wait_task(task.uid()).await.succeeded();
 
     let (response, _) = index
         .facet_search(json!({"facetName": "name_zh", "facetQuery": "進撃", "locales": ["cmn"]}))
@@ -1073,9 +1067,9 @@ async fn simple_facet_search() {
 
 #[actix_rt::test]
 async fn facet_search_with_localized_attributes() {
-    let server = Server::new().await;
+    let server = Server::new_shared();
+    let index = server.unique_index();
 
-    let index = server.index("test");
     let documents = DOCUMENTS.clone();
     let (response, _) = index
         .update_settings(json!({
@@ -1086,17 +1080,17 @@ async fn facet_search_with_localized_attributes() {
             ]
         }))
         .await;
-    snapshot!(response, @r###"
+    snapshot!(json_string!(response, { ".taskUid" => "[task_uid]", ".enqueuedAt" => "[date]" }), @r###"
     {
-      "taskUid": 0,
-      "indexUid": "test",
+      "taskUid": "[task_uid]",
+      "indexUid": "[uuid]",
       "status": "enqueued",
       "type": "settingsUpdate",
       "enqueuedAt": "[date]"
     }
     "###);
     let (task, _status_code) = index.add_documents(documents, None).await;
-    index.wait_task(task.uid()).await.succeeded();
+    server.wait_task(task.uid()).await.succeeded();
 
     let (response, _) = index
         .facet_search(json!({"facetName": "name_zh", "facetQuery": "进击", "locales": ["cmn"]}))
@@ -1146,9 +1140,9 @@ async fn facet_search_with_localized_attributes() {
 
 #[actix_rt::test]
 async fn swedish_search() {
-    let server = Server::new().await;
+    let server = Server::new_shared();
+    let index = server.unique_index();
 
-    let index = server.index("test");
     let documents = json!([
       {"id": "tra1-1", "product": "trä"},
       {"id": "tra2-1", "product": "traktor"},
@@ -1165,7 +1159,7 @@ async fn swedish_search() {
             ]
         }))
         .await;
-    index.wait_task(_response.uid()).await.succeeded();
+    server.wait_task(_response.uid()).await.succeeded();
 
     // infer swedish
     index
@@ -1269,9 +1263,9 @@ async fn swedish_search() {
 
 #[actix_rt::test]
 async fn german_search() {
-    let server = Server::new().await;
+    let server = Server::new_shared();
+    let index = server.unique_index();
 
-    let index = server.index("test");
     let documents = json!([
       {"id": 1, "product": "Interkulturalität"},
       {"id": 2, "product": "Wissensorganisation"},
@@ -1286,7 +1280,7 @@ async fn german_search() {
             ]
         }))
         .await;
-    index.wait_task(_response.uid()).await.succeeded();
+    server.wait_task(_response.uid()).await.succeeded();
 
     // infer swedish
     index

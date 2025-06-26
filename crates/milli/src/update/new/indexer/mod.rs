@@ -9,6 +9,7 @@ pub use document_operation::{DocumentOperation, PayloadStats};
 use hashbrown::HashMap;
 use heed::RwTxn;
 pub use partial_dump::PartialDump;
+pub use post_processing::recompute_word_fst_from_word_docids_database;
 pub use update_by_function::UpdateByFunction;
 pub use write::ChannelCongestion;
 use write::{build_vectors, update_index, write_to_db};
@@ -18,7 +19,7 @@ use super::steps::IndexingStep;
 use super::thread_local::ThreadLocal;
 use crate::documents::PrimaryKey;
 use crate::fields_ids_map::metadata::{FieldIdMapWithMetadata, MetadataBuilder};
-use crate::progress::Progress;
+use crate::progress::{EmbedderStats, Progress};
 use crate::update::GrenadParameters;
 use crate::vector::{ArroyWrapper, EmbeddingConfigs};
 use crate::{FieldsIdsMap, GlobalFieldsIdsMap, Index, InternalError, Result, ThreadPoolNoAbort};
@@ -54,6 +55,7 @@ pub fn index<'pl, 'indexer, 'index, DC, MSP>(
     embedders: EmbeddingConfigs,
     must_stop_processing: &'indexer MSP,
     progress: &'indexer Progress,
+    embedder_stats: &'indexer EmbedderStats,
 ) -> Result<ChannelCongestion>
 where
     DC: DocumentChanges<'pl>,
@@ -157,6 +159,7 @@ where
                         index_embeddings,
                         document_ids,
                         modified_docids,
+                        embedder_stats,
                     )
                 })
                 .unwrap()

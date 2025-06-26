@@ -1,11 +1,13 @@
+use std::sync::Arc;
+
 use bumpalo::collections::CollectIn;
 use bumpalo::Bump;
 use meilisearch_types::heed::RwTxn;
 use meilisearch_types::milli::documents::PrimaryKey;
-use meilisearch_types::milli::progress::Progress;
+use meilisearch_types::milli::progress::{EmbedderStats, Progress};
 use meilisearch_types::milli::update::new::indexer::{self, UpdateByFunction};
 use meilisearch_types::milli::update::DocumentAdditionResult;
-use meilisearch_types::milli::{self, ChannelCongestion, Filter, ThreadPoolNoAbortBuilder};
+use meilisearch_types::milli::{self, ChannelCongestion, Filter};
 use meilisearch_types::settings::apply_settings_to_builder;
 use meilisearch_types::tasks::{Details, KindWithContent, Status, Task};
 use meilisearch_types::Index;
@@ -24,7 +26,7 @@ impl IndexScheduler {
     /// The list of processed tasks.
     #[tracing::instrument(
         level = "trace",
-        skip(self, index_wtxn, index, progress),
+        skip(self, index_wtxn, index, progress, embedder_stats),
         target = "indexing::scheduler"
     )]
     pub(crate) fn apply_index_operation<'i>(
@@ -33,6 +35,7 @@ impl IndexScheduler {
         index: &'i Index,
         operation: IndexOperation,
         progress: &Progress,
+        embedder_stats: Arc<EmbedderStats>,
     ) -> Result<(Vec<Task>, Option<ChannelCongestion>)> {
         let indexer_alloc = Bump::new();
         let started_processing_at = std::time::Instant::now();
@@ -113,18 +116,8 @@ impl IndexScheduler {
                     }
                 }
 
-                let local_pool;
                 let indexer_config = self.index_mapper.indexer_config();
-                let pool = match &indexer_config.thread_pool {
-                    Some(pool) => pool,
-                    None => {
-                        local_pool = ThreadPoolNoAbortBuilder::new()
-                            .thread_name(|i| format!("indexing-thread-{i}"))
-                            .build()
-                            .unwrap();
-                        &local_pool
-                    }
-                };
+                let pool = &indexer_config.thread_pool;
 
                 progress.update_progress(DocumentOperationProgress::ComputingDocumentChanges);
                 let (document_changes, operation_stats, primary_key) = indexer
@@ -187,6 +180,7 @@ impl IndexScheduler {
                             embedders,
                             &|| must_stop_processing.get(),
                             progress,
+                            &embedder_stats,
                         )
                         .map_err(|e| Error::from_milli(e, Some(index_uid.clone())))?,
                     );
@@ -266,18 +260,8 @@ impl IndexScheduler {
 
                 let mut congestion = None;
                 if task.error.is_none() {
-                    let local_pool;
                     let indexer_config = self.index_mapper.indexer_config();
-                    let pool = match &indexer_config.thread_pool {
-                        Some(pool) => pool,
-                        None => {
-                            local_pool = ThreadPoolNoAbortBuilder::new()
-                                .thread_name(|i| format!("indexing-thread-{i}"))
-                                .build()
-                                .unwrap();
-                            &local_pool
-                        }
-                    };
+                    let pool = &indexer_config.thread_pool;
 
                     let candidates_count = candidates.len();
                     progress.update_progress(DocumentEditionProgress::ComputingDocumentChanges);
@@ -308,6 +292,7 @@ impl IndexScheduler {
                             embedders,
                             &|| must_stop_processing.get(),
                             progress,
+                            &embedder_stats,
                         )
                         .map_err(|err| Error::from_milli(err, Some(index_uid.clone())))?,
                     );
@@ -429,18 +414,8 @@ impl IndexScheduler {
 
                 let mut congestion = None;
                 if !tasks.iter().all(|res| res.error.is_some()) {
-                    let local_pool;
                     let indexer_config = self.index_mapper.indexer_config();
-                    let pool = match &indexer_config.thread_pool {
-                        Some(pool) => pool,
-                        None => {
-                            local_pool = ThreadPoolNoAbortBuilder::new()
-                                .thread_name(|i| format!("indexing-thread-{i}"))
-                                .build()
-                                .unwrap();
-                            &local_pool
-                        }
-                    };
+                    let pool = &indexer_config.thread_pool;
 
                     progress.update_progress(DocumentDeletionProgress::DeleteDocuments);
                     let mut indexer = indexer::DocumentDeletion::new();
@@ -466,6 +441,7 @@ impl IndexScheduler {
                             embedders,
                             &|| must_stop_processing.get(),
                             progress,
+                            &embedder_stats,
                         )
                         .map_err(|err| Error::from_milli(err, Some(index_uid.clone())))?,
                     );
@@ -502,6 +478,7 @@ impl IndexScheduler {
                     .execute(
                         |indexing_step| tracing::debug!(update = ?indexing_step),
                         || must_stop_processing.get(),
+                        embedder_stats,
                     )
                     .map_err(|err| Error::from_milli(err, Some(index_uid.clone())))?;
 
@@ -521,6 +498,7 @@ impl IndexScheduler {
                         tasks: cleared_tasks,
                     },
                     progress,
+                    embedder_stats.clone(),
                 )?;
 
                 let (settings_tasks, _congestion) = self.apply_index_operation(
@@ -528,6 +506,7 @@ impl IndexScheduler {
                     index,
                     IndexOperation::Settings { index_uid, settings, tasks: settings_tasks },
                     progress,
+                    embedder_stats,
                 )?;
 
                 let mut tasks = settings_tasks;

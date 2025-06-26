@@ -32,8 +32,7 @@ use crate::database_stats::DatabaseStats;
 use crate::documents::{obkv_to_object, DocumentsBatchReader};
 use crate::error::{Error, InternalError};
 use crate::index::{PrefixSearch, PrefixSettings};
-use crate::progress::Progress;
-use crate::thread_pool_no_abort::ThreadPoolNoAbortBuilder;
+use crate::progress::{EmbedderStats, Progress};
 pub use crate::update::index_documents::helpers::CursorClonableMmap;
 use crate::update::{
     IndexerConfig, UpdateIndexingStep, WordPrefixDocids, WordPrefixIntegerDocids, WordsPrefixesFst,
@@ -82,6 +81,7 @@ pub struct IndexDocuments<'t, 'i, 'a, FP, FA> {
     added_documents: u64,
     deleted_documents: u64,
     embedders: EmbeddingConfigs,
+    embedder_stats: &'t Arc<EmbedderStats>,
 }
 
 #[derive(Default, Debug, Clone)]
@@ -104,6 +104,7 @@ where
         config: IndexDocumentsConfig,
         progress: FP,
         should_abort: FA,
+        embedder_stats: &'t Arc<EmbedderStats>,
     ) -> Result<IndexDocuments<'t, 'i, 'a, FP, FA>> {
         let transform = Some(Transform::new(
             wtxn,
@@ -124,6 +125,7 @@ where
             added_documents: 0,
             deleted_documents: 0,
             embedders: Default::default(),
+            embedder_stats,
         })
     }
 
@@ -228,24 +230,7 @@ where
         let possible_embedding_mistakes =
             crate::vector::error::PossibleEmbeddingMistakes::new(&field_distribution);
 
-        let backup_pool;
-        let pool = match self.indexer_config.thread_pool {
-            Some(ref pool) => pool,
-            None => {
-                // We initialize a backup pool with the default
-                // settings if none have already been set.
-                #[allow(unused_mut)]
-                let mut pool_builder = ThreadPoolNoAbortBuilder::new();
-
-                #[cfg(test)]
-                {
-                    pool_builder = pool_builder.num_threads(1);
-                }
-
-                backup_pool = pool_builder.build()?;
-                &backup_pool
-            }
-        };
+        let pool = &self.indexer_config.thread_pool;
 
         // create LMDB writer channel
         let (lmdb_writer_sx, lmdb_writer_rx): (
@@ -310,6 +295,7 @@ where
 
         // Run extraction pipeline in parallel.
         let mut modified_docids = RoaringBitmap::new();
+        let embedder_stats = self.embedder_stats.clone();
         pool.install(|| {
                 let settings_diff_cloned = settings_diff.clone();
                 rayon::spawn(move || {
@@ -344,7 +330,8 @@ where
                             embedders_configs.clone(),
                             settings_diff_cloned,
                             max_positions_per_attributes,
-                            Arc::new(possible_embedding_mistakes)
+                            Arc::new(possible_embedding_mistakes),
+                            &embedder_stats
                         )
                     });
 
@@ -1580,12 +1567,12 @@ mod tests {
         let rtxn = index.read_txn().unwrap();
 
         // Only the first document should match.
-        let count = index.word_docids.get(&rtxn, "huàzhuāngbāo").unwrap().unwrap().len();
+        let count = index.word_docids.get(&rtxn, "huàzhuāng").unwrap().unwrap().len();
         assert_eq!(count, 1);
 
         // Only the second document should match.
         let count = index.word_docids.get(&rtxn, "bāo").unwrap().unwrap().len();
-        assert_eq!(count, 1);
+        assert_eq!(count, 2);
 
         let mut search = crate::Search::new(&rtxn, &index);
         search.query("化妆包");
@@ -2043,6 +2030,7 @@ mod tests {
             EmbeddingConfigs::default(),
             &|| false,
             &Progress::default(),
+            &Default::default(),
         )
         .unwrap();
         wtxn.commit().unwrap();
@@ -2130,6 +2118,7 @@ mod tests {
             EmbeddingConfigs::default(),
             &|| false,
             &Progress::default(),
+            &Default::default(),
         )
         .unwrap();
         wtxn.commit().unwrap();
@@ -2315,6 +2304,7 @@ mod tests {
             embedders,
             &|| false,
             &Progress::default(),
+            &Default::default(),
         )
         .unwrap();
         wtxn.commit().unwrap();
@@ -2377,6 +2367,7 @@ mod tests {
             embedders,
             &|| false,
             &Progress::default(),
+            &Default::default(),
         )
         .unwrap();
         wtxn.commit().unwrap();
@@ -2430,6 +2421,7 @@ mod tests {
             embedders,
             &|| false,
             &Progress::default(),
+            &Default::default(),
         )
         .unwrap();
         wtxn.commit().unwrap();
@@ -2482,6 +2474,7 @@ mod tests {
             embedders,
             &|| false,
             &Progress::default(),
+            &Default::default(),
         )
         .unwrap();
         wtxn.commit().unwrap();
@@ -2536,6 +2529,7 @@ mod tests {
             embedders,
             &|| false,
             &Progress::default(),
+            &Default::default(),
         )
         .unwrap();
         wtxn.commit().unwrap();
@@ -2595,6 +2589,7 @@ mod tests {
             embedders,
             &|| false,
             &Progress::default(),
+            &Default::default(),
         )
         .unwrap();
         wtxn.commit().unwrap();
@@ -2647,6 +2642,7 @@ mod tests {
             embedders,
             &|| false,
             &Progress::default(),
+            &Default::default(),
         )
         .unwrap();
         wtxn.commit().unwrap();
@@ -2699,6 +2695,7 @@ mod tests {
             embedders,
             &|| false,
             &Progress::default(),
+            &Default::default(),
         )
         .unwrap();
         wtxn.commit().unwrap();
@@ -2897,6 +2894,7 @@ mod tests {
             embedders,
             &|| false,
             &Progress::default(),
+            &Default::default(),
         )
         .unwrap();
         wtxn.commit().unwrap();
@@ -2956,6 +2954,7 @@ mod tests {
             embedders,
             &|| false,
             &Progress::default(),
+            &Default::default(),
         )
         .unwrap();
         wtxn.commit().unwrap();
@@ -3012,6 +3011,7 @@ mod tests {
             embedders,
             &|| false,
             &Progress::default(),
+            &Default::default(),
         )
         .unwrap();
         wtxn.commit().unwrap();

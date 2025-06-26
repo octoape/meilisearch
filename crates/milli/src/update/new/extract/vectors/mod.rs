@@ -6,6 +6,7 @@ use hashbrown::{DefaultHashBuilder, HashMap};
 
 use super::cache::DelAddRoaringBitmap;
 use crate::error::FaultSource;
+use crate::progress::EmbedderStats;
 use crate::prompt::Prompt;
 use crate::update::new::channel::EmbeddingSender;
 use crate::update::new::indexer::document_changes::{DocumentChangeContext, Extractor};
@@ -22,6 +23,7 @@ pub struct EmbeddingExtractor<'a, 'b> {
     embedders: &'a EmbeddingConfigs,
     sender: EmbeddingSender<'a, 'b>,
     possible_embedding_mistakes: PossibleEmbeddingMistakes,
+    embedder_stats: &'a EmbedderStats,
     threads: &'a ThreadPoolNoAbort,
 }
 
@@ -30,10 +32,11 @@ impl<'a, 'b> EmbeddingExtractor<'a, 'b> {
         embedders: &'a EmbeddingConfigs,
         sender: EmbeddingSender<'a, 'b>,
         field_distribution: &'a FieldDistribution,
+        embedder_stats: &'a EmbedderStats,
         threads: &'a ThreadPoolNoAbort,
     ) -> Self {
         let possible_embedding_mistakes = PossibleEmbeddingMistakes::new(field_distribution);
-        Self { embedders, sender, threads, possible_embedding_mistakes }
+        Self { embedders, sender, threads, possible_embedding_mistakes, embedder_stats }
     }
 }
 
@@ -75,6 +78,7 @@ impl<'extractor> Extractor<'extractor> for EmbeddingExtractor<'_, '_> {
                 prompt,
                 context.data,
                 &self.possible_embedding_mistakes,
+                self.embedder_stats,
                 self.threads,
                 self.sender,
                 &context.doc_alloc,
@@ -111,6 +115,8 @@ impl<'extractor> Extractor<'extractor> for EmbeddingExtractor<'_, '_> {
                         let prompt = chunks.prompt();
 
                         let old_vectors = old_vectors.vectors_for_key(embedder_name)?.unwrap();
+
+                        // case where we have a `_vectors` field in the updated document
                         if let Some(new_vectors) = new_vectors.as_ref().and_then(|new_vectors| {
                             new_vectors.vectors_for_key(embedder_name).transpose()
                         }) {
@@ -130,18 +136,9 @@ impl<'extractor> Extractor<'extractor> for EmbeddingExtractor<'_, '_> {
                                             error: error.to_string(),
                                         })?,
                                 )?;
+                            // regenerate if the new `_vectors` fields is set to.
                             } else if new_vectors.regenerate {
                                 let new_rendered = prompt.render_document(
-                                    update.external_document_id(),
-                                    update.current(
-                                        &context.rtxn,
-                                        context.index,
-                                        context.db_fields_ids_map,
-                                    )?,
-                                    context.new_fields_ids_map,
-                                    &context.doc_alloc,
-                                )?;
-                                let old_rendered = prompt.render_document(
                                     update.external_document_id(),
                                     update.merged(
                                         &context.rtxn,
@@ -151,7 +148,31 @@ impl<'extractor> Extractor<'extractor> for EmbeddingExtractor<'_, '_> {
                                     context.new_fields_ids_map,
                                     &context.doc_alloc,
                                 )?;
-                                if new_rendered != old_rendered {
+                                let must_regenerate = if !old_vectors.regenerate {
+                                    // we just enabled `regenerate`
+                                    true
+                                } else {
+                                    let old_rendered = prompt.render_document(
+                                        update.external_document_id(),
+                                        update.current(
+                                            &context.rtxn,
+                                            context.index,
+                                            context.db_fields_ids_map,
+                                        )?,
+                                        context.new_fields_ids_map,
+                                        &context.doc_alloc,
+                                    );
+
+                                    if let Ok(old_rendered) = old_rendered {
+                                        // must regenerate if the rendered changed
+                                        new_rendered != old_rendered
+                                    } else {
+                                        // cannot check previous rendered, better regenerate
+                                        true
+                                    }
+                                };
+
+                                if must_regenerate {
                                     chunks.set_autogenerated(
                                         update.docid(),
                                         update.external_document_id(),
@@ -160,17 +181,8 @@ impl<'extractor> Extractor<'extractor> for EmbeddingExtractor<'_, '_> {
                                     )?;
                                 }
                             }
+                        // no `_vectors` field, so only regenerate if the document is already set to in the DB.
                         } else if old_vectors.regenerate {
-                            let old_rendered = prompt.render_document(
-                                update.external_document_id(),
-                                update.current(
-                                    &context.rtxn,
-                                    context.index,
-                                    context.db_fields_ids_map,
-                                )?,
-                                context.new_fields_ids_map,
-                                &context.doc_alloc,
-                            )?;
                             let new_rendered = prompt.render_document(
                                 update.external_document_id(),
                                 update.merged(
@@ -181,7 +193,28 @@ impl<'extractor> Extractor<'extractor> for EmbeddingExtractor<'_, '_> {
                                 context.new_fields_ids_map,
                                 &context.doc_alloc,
                             )?;
-                            if new_rendered != old_rendered {
+
+                            let must_regenerate = {
+                                let old_rendered = prompt.render_document(
+                                    update.external_document_id(),
+                                    update.current(
+                                        &context.rtxn,
+                                        context.index,
+                                        context.db_fields_ids_map,
+                                    )?,
+                                    context.new_fields_ids_map,
+                                    &context.doc_alloc,
+                                );
+                                if let Ok(old_rendered) = old_rendered {
+                                    // regenerate if the rendered version changed
+                                    new_rendered != old_rendered
+                                } else {
+                                    // if we cannot render the previous version of the documents, let's regenerate
+                                    true
+                                }
+                            };
+
+                            if must_regenerate {
                                 chunks.set_autogenerated(
                                     update.docid(),
                                     update.external_document_id(),
@@ -278,6 +311,7 @@ struct Chunks<'a, 'b, 'extractor> {
     dimensions: usize,
     prompt: &'a Prompt,
     possible_embedding_mistakes: &'a PossibleEmbeddingMistakes,
+    embedder_stats: &'a EmbedderStats,
     user_provided: &'a RefCell<EmbeddingExtractorData<'extractor>>,
     threads: &'a ThreadPoolNoAbort,
     sender: EmbeddingSender<'a, 'b>,
@@ -293,6 +327,7 @@ impl<'a, 'b, 'extractor> Chunks<'a, 'b, 'extractor> {
         prompt: &'a Prompt,
         user_provided: &'a RefCell<EmbeddingExtractorData<'extractor>>,
         possible_embedding_mistakes: &'a PossibleEmbeddingMistakes,
+        embedder_stats: &'a EmbedderStats,
         threads: &'a ThreadPoolNoAbort,
         sender: EmbeddingSender<'a, 'b>,
         doc_alloc: &'a Bump,
@@ -307,6 +342,7 @@ impl<'a, 'b, 'extractor> Chunks<'a, 'b, 'extractor> {
             embedder,
             prompt,
             possible_embedding_mistakes,
+            embedder_stats,
             threads,
             sender,
             embedder_id,
@@ -342,6 +378,7 @@ impl<'a, 'b, 'extractor> Chunks<'a, 'b, 'extractor> {
             self.embedder_id,
             self.embedder_name,
             self.possible_embedding_mistakes,
+            self.embedder_stats,
             unused_vectors_distribution,
             self.threads,
             self.sender,
@@ -360,6 +397,7 @@ impl<'a, 'b, 'extractor> Chunks<'a, 'b, 'extractor> {
             self.embedder_id,
             self.embedder_name,
             self.possible_embedding_mistakes,
+            self.embedder_stats,
             unused_vectors_distribution,
             self.threads,
             self.sender,
@@ -378,6 +416,7 @@ impl<'a, 'b, 'extractor> Chunks<'a, 'b, 'extractor> {
         embedder_id: u8,
         embedder_name: &str,
         possible_embedding_mistakes: &PossibleEmbeddingMistakes,
+        embedder_stats: &EmbedderStats,
         unused_vectors_distribution: &UnusedVectorsDistributionBump,
         threads: &ThreadPoolNoAbort,
         sender: EmbeddingSender<'a, 'b>,
@@ -421,7 +460,7 @@ impl<'a, 'b, 'extractor> Chunks<'a, 'b, 'extractor> {
             return Err(crate::Error::UserError(crate::UserError::DocumentEmbeddingError(msg)));
         }
 
-        let res = match embedder.embed_index_ref(texts.as_slice(), threads) {
+        let res = match embedder.embed_index_ref(texts.as_slice(), threads, embedder_stats) {
             Ok(embeddings) => {
                 for (docid, embedding) in ids.into_iter().zip(embeddings) {
                     sender.set_vector(*docid, embedder_id, embedding).unwrap();

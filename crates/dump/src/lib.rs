@@ -305,6 +305,7 @@ pub(crate) mod test {
             localized_attributes: Setting::NotSet,
             facet_search: Setting::NotSet,
             prefix_search: Setting::NotSet,
+            chat: Setting::NotSet,
             _kind: std::marker::PhantomData,
         };
         settings.check()
@@ -328,6 +329,7 @@ pub(crate) mod test {
                 write_channel_congestion: None,
                 internal_database_sizes: Default::default(),
             },
+            embedder_stats: Default::default(),
             enqueued_at: Some(BatchEnqueuedAt {
                 earliest: datetime!(2022-11-11 0:00 UTC),
                 oldest: datetime!(2022-11-11 0:00 UTC),
