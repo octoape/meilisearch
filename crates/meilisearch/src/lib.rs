@@ -37,7 +37,10 @@ use index_scheduler::{IndexScheduler, IndexSchedulerOptions};
 use meilisearch_auth::{open_auth_store_env, AuthController};
 use meilisearch_types::milli::constants::VERSION_MAJOR;
 use meilisearch_types::milli::documents::{DocumentsBatchBuilder, DocumentsBatchReader};
-use meilisearch_types::milli::update::{IndexDocumentsConfig, IndexDocumentsMethod};
+use meilisearch_types::milli::progress::{EmbedderStats, Progress};
+use meilisearch_types::milli::update::{
+    default_thread_pool_and_threads, IndexDocumentsConfig, IndexDocumentsMethod, IndexerConfig,
+};
 use meilisearch_types::settings::apply_settings_to_builder;
 use meilisearch_types::tasks::KindWithContent;
 use meilisearch_types::versioning::{
@@ -234,11 +237,9 @@ pub fn setup_meilisearch(opt: &Opt) -> anyhow::Result<(Arc<IndexScheduler>, Arc<
         instance_features: opt.to_instance_features(),
         auto_upgrade: opt.experimental_dumpless_upgrade,
         embedding_cache_cap: opt.experimental_embedding_cache_entries,
+        experimental_no_snapshot_compaction: opt.experimental_no_snapshot_compaction,
     };
-    let bin_major: u32 = VERSION_MAJOR.parse().unwrap();
-    let bin_minor: u32 = VERSION_MINOR.parse().unwrap();
-    let bin_patch: u32 = VERSION_PATCH.parse().unwrap();
-    let binary_version = (bin_major, bin_minor, bin_patch);
+    let binary_version = (VERSION_MAJOR, VERSION_MINOR, VERSION_PATCH);
 
     let empty_db = is_empty_db(&opt.db_path);
     let (index_scheduler, auth_controller) = if let Some(ref snapshot_path) = opt.import_snapshot {
@@ -463,6 +464,7 @@ fn import_dump(
     index_scheduler: &mut IndexScheduler,
     auth: &mut AuthController,
 ) -> Result<(), anyhow::Error> {
+    let progress = Progress::default();
     let reader = File::open(dump_path)?;
     let mut dump_reader = dump::DumpReader::open(reader)?;
 
@@ -503,7 +505,19 @@ fn import_dump(
     let network = dump_reader.network()?.cloned().unwrap_or_default();
     index_scheduler.put_network(network)?;
 
-    let indexer_config = index_scheduler.indexer_config();
+    // 3.1 Use all cpus to process dump if `max_indexing_threads` not configured
+    let backup_config;
+    let base_config = index_scheduler.indexer_config();
+
+    let indexer_config = if base_config.max_threads.is_none() {
+        let (thread_pool, _) = default_thread_pool_and_threads();
+
+        let _config = IndexerConfig { thread_pool, ..*base_config };
+        backup_config = _config;
+        &backup_config
+    } else {
+        base_config
+    };
 
     // /!\ The tasks must be imported AFTER importing the indexes or else the scheduler might
     // try to process tasks while we're trying to import the indexes.
@@ -530,8 +544,8 @@ fn import_dump(
         tracing::info!("Importing the settings.");
         let settings = index_reader.settings()?;
         apply_settings_to_builder(&settings, &mut builder);
-        builder
-            .execute(|indexing_step| tracing::debug!("update: {:?}", indexing_step), || false)?;
+        let embedder_stats: Arc<EmbedderStats> = Default::default();
+        builder.execute(&|| false, &progress, embedder_stats.clone())?;
 
         // 4.3 Import the documents.
         // 4.3.1 We need to recreate the grenad+obkv format accepted by the index.
@@ -549,7 +563,7 @@ fn import_dump(
         let reader = BufReader::new(file);
         let reader = DocumentsBatchReader::from_reader(reader)?;
 
-        let embedder_configs = index.embedding_configs(&wtxn)?;
+        let embedder_configs = index.embedding_configs().embedding_configs(&wtxn)?;
         let embedders = index_scheduler.embedders(uid.to_string(), embedder_configs)?;
 
         let builder = milli::update::IndexDocuments::new(
@@ -562,6 +576,7 @@ fn import_dump(
             },
             |indexing_step| tracing::trace!("update: {:?}", indexing_step),
             || false,
+            &embedder_stats,
         )?;
 
         let builder = builder.with_embedders(embedders);
