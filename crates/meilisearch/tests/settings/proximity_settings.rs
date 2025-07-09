@@ -26,11 +26,11 @@ static DOCUMENTS: Lazy<crate::common::Value> = Lazy::new(|| {
 
 #[actix_rt::test]
 async fn attribute_scale_search() {
-    let server = Server::new().await;
-    let index = server.index("test");
+    let server = Server::new_shared();
+    let index = server.unique_index();
 
     let (task, _status_code) = index.add_documents(DOCUMENTS.clone(), None).await;
-    index.wait_task(task.uid()).await.succeeded();
+    server.wait_task(task.uid()).await.succeeded();
 
     let (response, code) = index
         .update_settings(json!({
@@ -38,8 +38,8 @@ async fn attribute_scale_search() {
             "rankingRules": ["words", "typo", "proximity"],
         }))
         .await;
-    assert_eq!("202", code.as_str(), "{:?}", response);
-    index.wait_task(response.uid()).await.succeeded();
+    assert_eq!("202", code.as_str(), "{response:?}");
+    server.wait_task(response.uid()).await.succeeded();
 
     // the expected order is [1, 3, 2] instead of [3, 1, 2]
     // because the attribute scale doesn't make the difference between 1 and 3.
@@ -99,11 +99,11 @@ async fn attribute_scale_search() {
 
 #[actix_rt::test]
 async fn attribute_scale_phrase_search() {
-    let server = Server::new().await;
-    let index = server.index("test");
+    let server = Server::new_shared();
+    let index = server.unique_index();
 
     let (task, _status_code) = index.add_documents(DOCUMENTS.clone(), None).await;
-    index.wait_task(task.uid()).await.succeeded();
+    server.wait_task(task.uid()).await.succeeded();
 
     let (task, _code) = index
         .update_settings(json!({
@@ -111,7 +111,7 @@ async fn attribute_scale_phrase_search() {
             "rankingRules": ["words", "typo", "proximity"],
         }))
         .await;
-    index.wait_task(task.uid()).await.succeeded();
+    server.wait_task(task.uid()).await.succeeded();
 
     // the expected order is [1, 3] instead of [3, 1]
     // because the attribute scale doesn't make the difference between 1 and 3.
@@ -167,11 +167,11 @@ async fn attribute_scale_phrase_search() {
 
 #[actix_rt::test]
 async fn word_scale_set_and_reset() {
-    let server = Server::new().await;
-    let index = server.index("test");
+    let server = Server::new_shared();
+    let index = server.unique_index();
 
     let (task, _status_code) = index.add_documents(DOCUMENTS.clone(), None).await;
-    index.wait_task(task.uid()).await.succeeded();
+    server.wait_task(task.uid()).await.succeeded();
 
     // Set and reset the setting ensuring the swap between the 2 settings is applied.
     let (update_task1, _code) = index
@@ -180,7 +180,7 @@ async fn word_scale_set_and_reset() {
             "rankingRules": ["words", "typo", "proximity"],
         }))
         .await;
-    index.wait_task(update_task1.uid()).await.succeeded();
+    server.wait_task(update_task1.uid()).await.succeeded();
 
     let (update_task2, _code) = index
         .update_settings(json!({
@@ -188,7 +188,7 @@ async fn word_scale_set_and_reset() {
             "rankingRules": ["words", "typo", "proximity"],
         }))
         .await;
-    index.wait_task(update_task2.uid()).await.succeeded();
+    server.wait_task(update_task2.uid()).await.succeeded();
 
     // [3, 1, 2]
     index
@@ -282,19 +282,19 @@ async fn word_scale_set_and_reset() {
 
 #[actix_rt::test]
 async fn attribute_scale_default_ranking_rules() {
-    let server = Server::new().await;
-    let index = server.index("test");
+    let server = Server::new_shared();
+    let index = server.unique_index();
 
     let (task, _status_code) = index.add_documents(DOCUMENTS.clone(), None).await;
-    index.wait_task(task.uid()).await.succeeded();
+    server.wait_task(task.uid()).await.succeeded();
 
     let (response, code) = index
         .update_settings(json!({
             "proximityPrecision": "byAttribute"
         }))
         .await;
-    assert_eq!("202", code.as_str(), "{:?}", response);
-    index.wait_task(response.uid()).await.succeeded();
+    assert_eq!("202", code.as_str(), "{response:?}");
+    server.wait_task(response.uid()).await.succeeded();
 
     // the expected order is [3, 1, 2]
     index
